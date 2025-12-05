@@ -1,0 +1,22 @@
+.app-shell {
+  min-height: 100vh;
+  background: linear-gradient(135deg, #e6fffb 0%, #fff7e6 50%, #f9f0ff 100%);
+}
+.app-header {
+  background: linear-gradient(90deg, #52c41a 0%, #13c2c2 50%, #722ed1 100%);
+  color: white;
+  display: flex;
+  align-items: center;
+  padding: 0 24px;
+}
+.app-header-title {
+  font-size: 20px;
+  font-weight: 700;
+}
+.app-header-subtitle {
+  margin-left: 12px;
+  opacity: 0.9;
+}
+.app-content {
+  margin: 24px;
+}

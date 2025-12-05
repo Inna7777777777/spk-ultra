@@ -1,0 +1,28 @@
+#cloud-config
+package_update: true
+package_upgrade: true
+
+packages:
+  - ca-certificates
+  - curl
+  - git
+  - docker.io
+  - docker-compose-plugin
+
+runcmd:
+  - mkdir -p /opt/spk-ultra
+  - cd /opt/spk-ultra
+  - |
+      if [ ! -d .git ]; then
+        # Замените URL ниже на ваш реальный репозиторий GitHub
+        git clone https://github.com/USER/spk-ultra.git .
+      else
+        git pull
+      fi
+  - |
+      if [ ! -f .env ]; then
+        if [ -f .env.example ]; then
+          cp .env.example .env
+        fi
+      fi
+  - docker compose up -d --build

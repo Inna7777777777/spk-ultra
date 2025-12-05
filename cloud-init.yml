@@ -15,7 +15,7 @@ runcmd:
   - |
       if [ ! -d .git ]; then
         # Замените URL ниже на ваш реальный репозиторий GitHub
-        git clone https://github.com/USER/spk-ultra.git .
+        git clone https://github.com/Inna7777777777/spk-ultra.git .
       else
         git pull
       fi

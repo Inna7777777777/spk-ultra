@@ -163,7 +163,7 @@ portainer:
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
     networks:
-      - spk_net
+    - spk_net
 
 networks:
   spk_net:

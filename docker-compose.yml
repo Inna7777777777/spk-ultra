@@ -1,170 +1,379 @@
 version: "3.9"
 
+# ==========================
+#  СЕТИ
+# ==========================
+networks:
+  spk_front:
+    driver: bridge
+  spk_back:
+    driver: bridge
+  spk_dmz:
+    driver: bridge
+  spk_monitoring:
+    driver: bridge
+
+# ==========================
+#  VOLUMES (ДАННЫЕ)
+# ==========================
+volumes:
+  postgres_data:
+  postgres_backups:
+  redis_data:
+  traefik_letsencrypt:
+  backend_static:
+  frontend_build:
+  portainer_data:
+  pgadmin_data:
+  minio_data:
+  rabbitmq_data:
+  grafana_data:
+  loki_data:
+  adminer_data:
+  mail_data:
+
+# ==========================
+#  СЕРВИСЫ
+# ==========================
 services:
-  # === Traefik (reverse-proxy + HTTPS) ===
+
+  # ========================
+  #  Reverse-proxy + HTTPS
+  # ========================
   traefik:
     image: traefik:v3.0
     container_name: traefik
     restart: always
     command:
       - "--api.dashboard=true"
+      - "--api.insecure=false"
       - "--providers.docker=true"
       - "--providers.docker.exposedbydefault=false"
       - "--entrypoints.web.address=:80"
       - "--entrypoints.websecure.address=:443"
-      - "--certificatesresolvers.letsencrypt.acme.tlschallenge=true"
-      - "--certificatesresolvers.letsencrypt.acme.email=${TRAEFIK_EMAIL}"
-      - "--certificatesresolvers.letsencrypt.acme.storage=/letsencrypt/acme.json"
+      - "--certificatesresolvers.le.acme.tlschallenge=true"
+      - "--certificatesresolvers.le.acme.email=${TRAEFIK_EMAIL}"
+      - "--certificatesresolvers.le.acme.storage=/letsencrypt/acme.json"
     ports:
       - "80:80"
       - "443:443"
     volumes:
-      - /var/run/docker.sock:/var/run/docker.sock:ro
-      - ./traefik/letsencrypt:/letsencrypt
-      - ./traefik/traefik.yml:/traefik.yml:ro
+      - "/var/run/docker.sock:/var/run/docker.sock:ro"
+      - traefik_letsencrypt:/letsencrypt
     networks:
-      - spk_net
-    healthcheck:
-      test: ["CMD", "traefik", "healthcheck", "--ping"]
-      interval: 30s
-      timeout: 5s
-      retries: 5
+      - spk_front
+      - spk_dmz
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.traefik.rule=Host(`${TRAEFIK_DOMAIN}`)"
+      - "traefik.http.routers.traefik.entrypoints=websecure"
+      - "traefik.http.routers.traefik.tls.certresolver=le"
+      - "traefik.http.routers.traefik.service=api@internal"
 
-  # === БД Postgres ===
+  # ========================
+  #  PostgreSQL (основная БД)
+  # ========================
   db:
     image: postgres:15
     container_name: spk_db
     restart: always
+    env_file:
+      - .env
     environment:
-      POSTGRES_DB: ${POSTGRES_DB}
-      POSTGRES_USER: ${POSTGRES_USER}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
-      TZ: ${TZ}
+      - POSTGRES_DB=${POSTGRES_DB}
+      - POSTGRES_USER=${POSTGRES_USER}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
     volumes:
-      - ./db_data:/var/lib/postgresql/data
+      - postgres_data:/var/lib/postgresql/data
+      - postgres_backups:/backups
     networks:
-      - spk_net
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
-      interval: 30s
-      timeout: 5s
-      retries: 5
+      - spk_back
 
-  # === Backend (API) ===
+  # ========================
+  #  Redis (кэш / фоновые задачи)
+  # ========================
+  redis:
+    image: redis:7
+    container_name: spk_redis
+    restart: always
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - redis_data:/data
+    networks:
+      - spk_back
+
+  # ========================
+  #  BACKEND (FastAPI / Django / др.)
+  # ========================
   backend:
     build:
       context: ./backend
       dockerfile: Dockerfile
     container_name: spk_backend
     restart: always
-    environment:
-      NODE_ENV: production
-      DATABASE_URL: ${DATABASE_URL}
-      TZ: ${TZ}
+    env_file:
+      - .env
     depends_on:
-      db:
-        condition: service_healthy
+      - db
+      - redis
     networks:
-      - spk_net
+      - spk_back
+      - spk_front
     labels:
       - "traefik.enable=true"
-      - "traefik.http.routers.backend.rule=Host(${BACKEND_DOMAIN})"
+      - "traefik.http.routers.backend.rule=Host(`${BACKEND_DOMAIN}`)"
       - "traefik.http.routers.backend.entrypoints=websecure"
-      - "traefik.http.routers.backend.tls.certresolver=letsencrypt"
-      - "traefik.http.services.backend.loadbalancer.server.port=4000"
-    healthcheck:
-      test: ["CMD-SHELL", "curl -f http://localhost:4000/health || exit 1"]
-      interval: 30s
-      timeout: 5s
-      retries: 5
+      - "traefik.http.routers.backend.tls.certresolver=le"
+      - "traefik.http.services.backend.loadbalancer.server.port=8000"
 
-  # === Frontend (React/SPA) ===
+  # ========================
+  #  FRONTEND (React / Vue)
+  # ========================
   frontend:
     build:
       context: ./frontend
       dockerfile: Dockerfile
     container_name: spk_frontend
     restart: always
+    env_file:
+      - .env
     depends_on:
-      backend:
-        condition: service_healthy
+      - backend
     networks:
-      - spk_net
+      - spk_front
     labels:
       - "traefik.enable=true"
-      - "traefik.http.routers.frontend.rule=Host(${FRONTEND_DOMAIN})"
+      - "traefik.http.routers.frontend.rule=Host(`${FRONTEND_DOMAIN}`)"
       - "traefik.http.routers.frontend.entrypoints=websecure"
-      - "traefik.http.routers.frontend.tls.certresolver=letsencrypt"
+      - "traefik.http.routers.frontend.tls.certresolver=le"
       - "traefik.http.services.frontend.loadbalancer.server.port=3000"
-    healthcheck:
-      test: ["CMD-SHELL", "curl -f http://localhost:3000 || exit 1"]
-      interval: 30s
-      timeout: 5s
-      retries: 5
 
-  # === Portainer (управление Docker) ===
-
-
-portainer:
-    image: ghcr.io/portainer/portainer-ce:latest
+  # ========================
+  #  Portainer (GUI для Docker)
+  # ========================
+  portainer:
+    image: portainer/portainer-ce:latest
     container_name: portainer
     restart: always
-    command: ["-H", "unix:///var/run/docker.sock"]
+    command: -H unix:///var/run/docker.sock
     volumes:
-      - /var/run/docker.sock:/var/run/docker.sock
-      - ./portainer_data:/data
+      - "/var/run/docker.sock:/var/run/docker.sock"
+      - portainer_data:/data
     networks:
-      - spk_net
+      - spk_dmz
     labels:
       - "traefik.enable=true"
-      - "traefik.http.routers.portainer.rule=Host(${PORTAINER_DOMAIN})"
+      - "traefik.http.routers.portainer.rule=Host(`${PORTAINER_DOMAIN}`)"
       - "traefik.http.routers.portainer.entrypoints=websecure"
-      - "traefik.http.routers.portainer.tls.certresolver=letsencrypt"
+      - "traefik.http.routers.portainer.tls.certresolver=le"
       - "traefik.http.services.portainer.loadbalancer.server.port=9000"
-    healthcheck:
-      test: ["CMD-SHELL", "curl -f http://localhost:9000/api/status || exit 1"]
-      interval: 30s
-      timeout: 5s
-      retries: 5
 
-  # === Автобэкапы БД (ежедневно) ===
+  # ========================
+  #  PgAdmin (GUI к PostgreSQL)
+  # ========================
+  pgadmin:
+    image: dpage/pgadmin4:latest
+    container_name: pgadmin
+    restart: always
+    env_file:
+      - .env
+    environment:
+      - PGADMIN_DEFAULT_EMAIL=${PGADMIN_EMAIL}
+      - PGADMIN_DEFAULT_PASSWORD=${PGADMIN_PASSWORD}
+    volumes:
+      - pgadmin_data:/var/lib/pgadmin
+    depends_on:
+      - db
+    networks:
+      - spk_dmz
+      - spk_back
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.pgadmin.rule=Host(`${PGADMIN_DOMAIN}`)"
+      - "traefik.http.routers.pgadmin.entrypoints=websecure"
+      - "traefik.http.routers.pgadmin.tls.certresolver=le"
+      - "traefik.http.services.pgadmin.loadbalancer.server.port=80"
+
+  # ========================
+  #  Adminer (ещё один DB GUI)
+  # ========================
+  adminer:
+    image: adminer:latest
+    container_name: adminer
+    restart: always
+    depends_on:
+      - db
+    networks:
+      - spk_dmz
+      - spk_back
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.adminer.rule=Host(`${ADMINER_DOMAIN}`)"
+      - "traefik.http.routers.adminer.entrypoints=websecure"
+      - "traefik.http.routers.adminer.tls.certresolver=le"
+      - "traefik.http.services.adminer.loadbalancer.server.port=8080"
+
+  # ========================
+  #  MinIO (облачное хранилище S3)
+  # ========================
+  minio:
+    image: minio/minio:latest
+    container_name: minio
+    restart: always
+    env_file:
+      - .env
+    environment:
+      - MINIO_ROOT_USER=${MINIO_ROOT_USER}
+      - MINIO_ROOT_PASSWORD=${MINIO_ROOT_PASSWORD}
+    command: server /data --console-address ":9001"
+    volumes:
+      - minio_data:/data
+    networks:
+      - spk_back
+      - spk_dmz
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.minio-api.rule=Host(`${MINIO_API_DOMAIN}`)"
+      - "traefik.http.routers.minio-api.entrypoints=websecure"
+      - "traefik.http.routers.minio-api.tls.certresolver=le"
+      - "traefik.http.services.minio-api.loadbalancer.server.port=9000"
+      - "traefik.http.routers.minio-console.rule=Host(`${MINIO_CONSOLE_DOMAIN}`)"
+      - "traefik.http.routers.minio-console.entrypoints=websecure"
+      - "traefik.http.routers.minio-console.tls.certresolver=le"
+      - "traefik.http.services.minio-console.loadbalancer.server.port=9001"
+
+  # ========================
+  #  RabbitMQ (очереди задач)
+  # ========================
+  rabbitmq:
+    image: rabbitmq:3-management
+    container_name: rabbitmq
+    restart: always
+    env_file:
+      - .env
+    environment:
+      - RABBITMQ_DEFAULT_USER=${RABBITMQ_USER}
+      - RABBITMQ_DEFAULT_PASS=${RABBITMQ_PASSWORD}
+    volumes:
+      - rabbitmq_data:/var/lib/rabbitmq
+    networks:
+      - spk_back
+      - spk_dmz
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.rabbitmq.rule=Host(`${RABBITMQ_DOMAIN}`)"
+      - "traefik.http.routers.rabbitmq.entrypoints=websecure"
+      - "traefik.http.routers.rabbitmq.tls.certresolver=le"
+      - "traefik.http.services.rabbitmq.loadbalancer.server.port=15672"
+
+  # ========================
+  #  Loki + Grafana (логи + дашборды)
+  # ========================
+  loki:
+    image: grafana/loki:2.9.0
+    container_name: loki
+    restart: always
+    command: ["-config.file=/etc/loki/local-config.yaml"]
+    volumes:
+      - loki_data:/loki
+    networks:
+      - spk_monitoring
+
+  grafana:
+    image: grafana/grafana:10.4.2
+    container_name: grafana
+    restart: always
+    env_file:
+      - .env
+    environment:
+      - GF_SECURITY_ADMIN_USER=${GRAFANA_USER}
+      - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_PASSWORD}
+    depends_on:
+      - loki
+    volumes:
+      - grafana_data:/var/lib/grafana
+    networks:
+      - spk_monitoring
+      - spk_dmz
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.grafana.rule=Host(`${GRAFANA_DOMAIN}`)"
+      - "traefik.http.routers.grafana.entrypoints=websecure"
+      - "traefik.http.routers.grafana.tls.certresolver=le"
+      - "traefik.http.services.grafana.loadbalancer.server.port=3000"
+
+  # ========================
+  #  Простая SMTP-почта (Postfix)
+  # ========================
+  mail:
+    image: boky/postfix
+    container_name: spk_mail
+    restart: always
+    env_file:
+      - .env
+    environment:
+      - MAIL_DOMAIN=${MAIL_DOMAIN}
+      - SMTP_USER=${MAIL_USER}
+      - SMTP_PASSWORD=${MAIL_PASSWORD}
+    volumes:
+      - mail_data:/var/spool/postfix
+    networks:
+      - spk_back
+      - spk_dmz
+
+  # ========================
+  #  Бэкап БД (cron-контейнер)
+  # ========================
   db_backup:
     image: postgres:15
     container_name: spk_db_backup
     restart: always
+    env_file:
+      - .env
     environment:
-      PGPASSWORD: ${POSTGRES_PASSWORD}
-      POSTGRES_USER: ${POSTGRES_USER}
-      POSTGRES_DB: ${POSTGRES_DB}
-      TZ: ${TZ}
-      BACKUP_FOLDER: ${BACKUP_FOLDER}
+      - POSTGRES_DB=${POSTGRES_DB}
+      - POSTGRES_USER=${POSTGRES_USER}
+      - PGPASSWORD=${POSTGRES_PASSWORD}
     volumes:
-      - ./db_backups:${BACKUP_FOLDER}
-    networks:
-      - spk_net
-    depends_on:
-      db:
-        condition: service_healthy
-    entrypoint: >
-      bash -c 'while true; do
-        echo "[$$(date)] Running DB backup..." &&
-        pg_dump -h db -U $$POSTGRES_USER -d $$POSTGRES_DB \
-          > $$BACKUP_FOLDER/spk_db_$$(date +%F_%H-%M-%S).sql &&
-        find $$BACKUP_FOLDER -type f -mtime +7 -delete ;
+      - postgres_backups:/backups
+    command: >
+      bash -c "
+      while true; do
+        pg_dump -h db -U ${POSTGRES_USER} ${POSTGRES_DB} > /backups/backup_$(date +%Y%m%d_%H%M%S).sql;
         sleep 86400;
-      done'
+      done"
+    depends_on:
+      - db
+    networks:
+      - spk_back
 
-  # === Watchtower (автообновление контейнеров) ===
+  # ========================
+  #  Watchtower (авто-обновление образов)
+  # ========================
   watchtower:
     image: containrrr/watchtower
     container_name: watchtower
     restart: always
     command: --cleanup --interval 3600
     volumes:
-      - /var/run/docker.sock:/var/run/docker.sock
+      - "/var/run/docker.sock:/var/run/docker.sock"
     networks:
-    - spk_net
+      - spk_dmz
 
-networks:
-  spk_net:
-    driver: bridge
+  # ========================
+  #  Autoheal (перезапуск упавших контейнеров)
+  # ========================
+  autoheal:
+    image: willfarrell/autoheal
+    container_name: autoheal
+    restart: always
+    environment:
+      - AUTOHEAL_CONTAINER_LABEL=autoheal=true
+      - AUTOHEAL_INTERVAL=30
+      - AUTOHEAL_START_PERIOD=60
+      - AUTOHEAL_DEFAULT_STOP_TIMEOUT=10
+    volumes:
+      - "/var/run/docker.sock:/var/run/docker.sock"
+    networks:
+      - spk_dmz
+

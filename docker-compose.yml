@@ -377,4 +377,202 @@ services:
     networks:
       - spk_dmz 
 
+services:
+  traefik:
+    image: traefik:v3.0
+    restart: always
+    command:
+      - "--api.dashboard=true"
+      - "--api.insecure=false"
+      - "--entrypoints.web.address=:80"
+      - "--entrypoints.websecure.address=:443"
+      - "--providers.docker=true"
+      - "--providers.docker.exposedbydefault=false"
+      - "--certificatesresolvers.myresolver.acme.tlschallenge=true"
+      - "--certificatesresolvers.myresolver.acme.email=${TRAEFIK_EMAIL}"
+      - "--certificatesresolvers.myresolver.acme.storage=/letsencrypt/acme.json"
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - ./traefik/letsencrypt:/letsencrypt
+    networks: [spk_net]
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.traefik.rule=Host(${TRAEFIK_DOMAIN})"
+      - "traefik.http.routers.traefik.entrypoints=websecure"
+      - "traefik.http.routers.traefik.tls.certresolver=myresolver"
+      - "traefik.http.services.traefik.loadbalancer.server.port=8080"
 
+  spk_db:
+    image: postgres:15
+    restart: always
+    env_file: .env
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    volumes:
+      - spk_db_data:/var/lib/postgresql/data
+    networks: [spk_net]
+
+  spk_redis:
+    image: redis:7
+    restart: always
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - spk_redis_data:/data
+    networks: [spk_net]
+
+  spk_rabbit:
+    image: rabbitmq:3-management
+    restart: always
+    env_file: .env
+    environment:
+      RABBITMQ_DEFAULT_USER: ${RABBITMQ_USER}
+      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_PASSWORD}
+    volumes:
+      - spk_rabbitmq_data:/var/lib/rabbitmq
+    networks: [spk_net]
+    expose: ["15672"]
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.rabbitmq.rule=Host(${RABBITMQ_DOMAIN})"
+      - "traefik.http.routers.rabbitmq.entrypoints=websecure"
+      - "traefik.http.routers.rabbitmq.tls.certresolver=myresolver"
+      - "traefik.http.services.rabbitmq.loadbalancer.server.port=15672"
+
+  spk_backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    restart: always
+    env_file: .env
+    depends_on: [spk_db, spk_redis, spk_rabbit]
+    networks: [spk_net]
+    expose: ["8000"]
+    command: >
+      uvicorn app.main:app
+      --host 0.0.0.0
+      --port 8000
+      --workers 4
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.backend.rule=Host(${BACKEND_DOMAIN})"
+      - "traefik.http.routers.backend.entrypoints=websecure"
+      - "traefik.http.routers.backend.tls.certresolver=myresolver"
+      - "traefik.http.services.backend.loadbalancer.server.port=8000"
+
+  spk_frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    restart: always
+    env_file: .env
+    depends_on: [spk_backend]
+    networks: [spk_net]
+    expose: ["3000"]
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.frontend.rule=Host(${FRONTEND_DOMAIN})"
+      - "traefik.http.routers.frontend.entrypoints=websecure"
+      - "traefik.http.routers.frontend.tls.certresolver=myresolver"
+      - "traefik.http.services.frontend.loadbalancer.server.port=3000"
+
+  pgadmin:
+    image: dpage/pgadmin4:latest
+    restart: always
+    env_file: .env
+    environment:
+      PGADMIN_DEFAULT_EMAIL: ${PGADMIN_EMAIL}
+      PGADMIN_DEFAULT_PASSWORD: ${PGADMIN_PASSWORD}
+    volumes:
+      - pgadmin_data:/var/lib/pgadmin
+    depends_on: [spk_db]
+    networks: [spk_net]
+    expose: ["80"]
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.pgadmin.rule=Host(${PGADMIN_DOMAIN})"
+      - "traefik.http.routers.pgadmin.entrypoints=websecure"
+      - "traefik.http.routers.pgadmin.tls.certresolver=myresolver"
+      - "traefik.http.services.pgadmin.loadbalancer.server.port=80"
+
+  adminer:
+    image: adminer:latest
+    restart: always
+    networks: [spk_net]
+    expose: ["8080"]
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.adminer.rule=Host(${ADMINER_DOMAIN})"
+      - "traefik.http.routers.adminer.entrypoints=websecure"
+      - "traefik.http.routers.adminer.tls.certresolver=myresolver"
+      - "traefik.http.services.adminer.loadbalancer.server.port=8080"
+
+  portainer:
+    image: portainer/portainer-ce:latest
+    restart: always
+    command: -H unix:///var/run/docker.sock
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - portainer_data:/data
+    networks: [spk_net]
+    expose: ["9443"]
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.portainer.rule=Host(${PORTAINER_DOMAIN})"
+      - "traefik.http.routers.portainer.entrypoints=websecure"
+      - "traefik.http.routers.portainer.tls.certresolver=myresolver"
+      - "traefik.http.services.portainer.loadbalancer.server.port=9443"
+
+  minio:
+    image: minio/minio:latest
+    restart: always
+    env_file: .env
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
+    command: server /data --console-address ":9001"
+    volumes:
+      - minio_data:/data
+    networks: [spk_net]
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.minio-api.rule=Host(${MINIO_API_DOMAIN})"
+      - "traefik.http.routers.minio-api.entrypoints=websecure"
+      - "traefik.http.routers.minio-api.tls.certresolver=myresolver"
+      - "traefik.http.services.minio-api.loadbalancer.server.port=9000"
+      - "traefik.http.routers.minio-console.rule=Host(${MINIO_CONSOLE_DOMAIN})"
+      - "traefik.http.routers.minio-console.entrypoints=websecure"
+      - "traefik.http.routers.minio-console.tls.certresolver=myresolver"
+      - "traefik.http.services.minio-console.loadbalancer.server.port=9001"
+
+  grafana:
+    image: grafana/grafana:latest
+    restart: always
+    env_file: .env
+    volumes:
+      - grafana_data:/var/lib/grafana
+    networks: [spk_net]
+    expose: ["3000"]
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.grafana.rule=Host(${GRAFANA_DOMAIN})"
+      - "traefik.http.routers.grafana.entrypoints=websecure"
+      - "traefik.http.routers.grafana.tls.certresolver=myresolver"
+      - "traefik.http.services.grafana.loadbalancer.server.port=3000"
+
+networks:
+  spk_net:
+    driver: bridge
+
+volumes:
+  spk_db_data:
+  spk_redis_data:
+  spk_rabbitmq_data:
+  portainer_data:
+  pgadmin_data:
+  minio_data:
+  grafana_data:

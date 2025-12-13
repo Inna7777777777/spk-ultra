@@ -24,7 +24,65 @@
 - `.github/workflows/deploy.yml` — (см. ниже) CI/CD для автоматического деплоя на VPS
 - `scripts/` — скрипты для инициализации и деплоя
 
-Файл `.gitignore` уже настроен для Python / Node / IDE.
+Файл `.gitignore` уже настроен для Python / Node / IDE 
+
+spk-ultra/
+├── backend/
+│   ├── app/
+│   │   ├── main.py
+│   │   ├── core/
+│   │   │   ├── config.py
+│   │   │   ├── security.py
+│   │   │   └── roles.py
+│   │   ├── api/
+│   │   │   ├── auth.py
+│   │   │   ├── users.py
+│   │   │   ├── payments.py
+│   │   │   ├── documents.py
+│   │   │   └── votes.py
+│   │   ├── models/
+│   │   ├── schemas/
+│   │   ├── services/
+│   │   └── seed.py
+│   ├── requirements.txt
+│   └── Dockerfile
+│
+├── frontend/
+│   ├── src/
+│   │   ├── components/
+│   │   │   ├── LoginPortal.tsx
+│   │   │   ├── Sidebar.tsx
+│   │   │   └── Header.tsx
+│   │   ├── pages/
+│   │   │   ├── gardener/
+│   │   │   ├── chairman/
+│   │   │   ├── board/
+│   │   │   ├── audit/
+│   │   │   ├── accountant/
+│   │   │   ├── admin/
+│   │   │   └── superadmin/
+│   │   ├── theme/
+│   │   │   ├── colors.ts
+│   │   │   ├── typography.ts
+│   │   │   └── layout.ts
+│   │   ├── App.tsx
+│   │   └── main.tsx
+│   ├── index.html
+│   ├── package.json
+│   └── Dockerfile
+│
+├── .github/
+│   └── workflows/
+│       └── deploy.yml
+│
+├── scripts/
+│   ├── deploy.sh
+│   ├── init_roles.sh
+│   └── backup_db.sh
+│
+├── .env.example
+├── docker-compose.yml
+├── README.md
 
 ## 2. Развёртывание на VPS (например, Timeweb)
 

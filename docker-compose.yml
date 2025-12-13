@@ -499,7 +499,7 @@ services:
       - "traefik.http.routers.pgadmin.tls.certresolver=myresolver"
       - "traefik.http.services.pgadmin.loadbalancer.server.port=80"
 
-  adminer:
+adminer:
     image: adminer:latest
     restart: always
     networks: [spk_net]
